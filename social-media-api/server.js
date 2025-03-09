@@ -25,9 +25,9 @@ app.get('/api-docs', (req, res) => {
 
 app.use('/users', require('./routes/users'));
 app.use('/posts', require('./routes/posts'));
-// app.use('/comments', require('./routes/comments'));
-// app.use('/likes', require('./routes/likes'));
-// app.use('/followers', require('./routes/followers'));
+app.use('/comments', require('./routes/comments'));
+app.use('/likes', require('./routes/likes'));
+app.use('/followers', require('./routes/followers'));
 
 // Basic route
 app.get('/', (req, res) => {
@@ -49,3 +49,5 @@ process.on('unhandledRejection', (err, promise) => {
   // Close server & exit process
   process.exit(1);
 });
+
+app.use(require('./middleware/formatResponse'));
