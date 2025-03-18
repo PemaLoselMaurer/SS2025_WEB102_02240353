@@ -1,3 +1,7 @@
+const ErrorResponse = require('..//utils/errorResponse');
+const asyncHandler = require('..//middleware/async');
+const { followers } = require('..//utils/mockData');
+
 // @desc    Follow a user
 // @route   POST /api/users/:id/follow
 // @access  Private

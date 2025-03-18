@@ -1,3 +1,7 @@
+const ErrorResponse = require('..//utils/errorResponse');
+const asyncHandler = require('..//middleware/async');
+const { comments  } = require('..//utils/mockData');
+
 // @desc    Add a comment to a post
 // @route   POST /api/posts/:id/comment
 // @access  Private
