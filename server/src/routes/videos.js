@@ -1,33 +1,21 @@
 const express = require('express');
 const videoController = require('../controllers/videoController');
+const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET all videos
-router.get('/api/videos', videoController.getAllVideos);
+// Public routes
+router.get('/', videoController.getAllVideos);
+router.get('/:id', videoController.getVideoById);
+router.get('/:id/comments', videoController.getVideoComments);
 
-// POST create a new video
-router.post('/api/videos', videoController.createVideo);
+// Protected routes
+router.post('/', protect, videoController.createVideo);
+router.put('/:id', protect, videoController.updateVideo);
+router.delete('/:id', protect, videoController.deleteVideo);
 
-// GET video by ID
-router.get('/api/videos/:id', videoController.getVideoById);
+// Like/unlike video
+router.post('/:id/like', protect, videoController.toggleVideoLike);
+router.delete('/:id/like', protect, videoController.toggleVideoLike);
 
-// PUT update a video
-router.put('/api/videos/:id', videoController.updateVideo);
-
-// DELETE a video
-router.delete('/api/videos/:id', videoController.deleteVideo);
-
-// GET video comments
-router.get('/api/videos/:id/comments', videoController.getVideoComments);
-
-// GET video likes
-router.get('/api/videos/:id/likes', videoController.getVideoLikes);
-
-// POST like a video
-router.post('/api/videos/:id/likes', videoController.likeVideo);
-
-// DELETE unlike a video
-router.delete('/api/videos/:id/likes', videoController.unlikeVideo);
-
-module.exports = router;
+module.exports = router;

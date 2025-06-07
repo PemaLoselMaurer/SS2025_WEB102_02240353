@@ -1,217 +1,399 @@
-const dataStore = require('../models');
+const prisma = require('../lib/prisma');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
-// GET all users
-const getAllUsers = (req, res) => {
-  res.status(200).json(dataStore.users);
-};
-
-// GET user by ID
-const getUserById = (req, res) => {
-  const userId = parseInt(req.params.id);
-  const user = dataStore.users.find(u => u.id === userId);
-
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+// Get all users
+exports.getAllUsers = async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        bio: true, // Ensure this field exists in the database
+        avatar: true,
+        createdAt: true,
+        _count: {
+          select: {
+            videos: true,
+            followedBy: true,
+            following: true
+          }
+        }
+      }
+    });
+    
+    res.status(200).json(users);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ message: 'Failed to fetch users' });
   }
-
-  res.status(200).json(user);
 };
 
-// POST create a new user
-const createUser = (req, res) => {
-  const { username, email, name } = req.body;
-
-  // Basic validation
-  if (!username || !email) {
-    return res.status(400).json({ error: 'Required fields missing' });
+// Get user by ID
+exports.getUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(id) },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        bio: true,
+        avatar: true,
+        createdAt: true,
+        _count: {
+          select: {
+            videos: true,
+            followedBy: true,
+            following: true
+          }
+        }
+      }
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.status(200).json(user);
+  } catch (error) {
+    console.error(`Error fetching user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to fetch user' });
   }
+};
 
-  // Check if username or email already exists
-  const usernameExists = dataStore.users.some(user => user.username === username);
-  const emailExists = dataStore.users.some(user => user.email === email);
-  if (usernameExists) {
-    return res.status(409).json({ error: 'Username already taken' });
+// Register new user
+exports.registerUser = async (req, res) => {
+  try {
+    const { username, email, password, name } = req.body;
+    
+    // Check if user already exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username },
+          { email }
+        ]
+      }
+    });
+    
+    if (existingUser) {
+      return res.status(400).json({ 
+        message: existingUser.username === username 
+          ? 'Username already taken' 
+          : 'Email already registered' 
+      });
+    }
+    
+    // Hash the password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Create the user
+    const newUser = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashedPassword,
+        name: name || username
+      }
+    });
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: newUser.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+    
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = newUser;
+    
+    res.status(201).json({
+      user: userWithoutPassword,
+      token
+    });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ message: 'Failed to register user' });
   }
+};
 
-  if (emailExists) {
-    return res.status(409).json({ error: 'Email already registered' });
+// Login user
+exports.loginUser = async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Find user by username
+    const user = await prisma.user.findUnique({
+      where: { username }
+    });
+    
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    // Check password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+    
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+    
+    res.status(200).json({
+      user: userWithoutPassword,
+      token
+    });
+  } catch (error) {
+    console.error('Error logging in user:', error);
+    res.status(500).json({ message: 'Failed to login' });
   }
-
-  const newUser = {
-    id: dataStore.nextIds.users++,
-    username,
-    email,
-    name: name || username,
-    followers: [],
-    following: [],
-    createdAt: new Date().toISOString()
-  };
-
-  dataStore.users.push(newUser);
-
-  res.status(201).json(newUser);
 };
 
- // PUT update a user
- const updateUser = (req, res) => {
-   const userId = parseInt(req.params.id);
-   const userIndex = dataStore.users.findIndex(u => u.id === userId);
-
-   if (userIndex === -1) {
-     return res.status(404).json({ error: 'User not found' });
-   }
-
-   const { name, email } = req.body;
-   const user = dataStore.users[userIndex];
-
-    // Update fields if provided
-   if (name) user.name = name;
-   if (email) {
-     // Check if email is already used by another user
-     const emailExists = dataStore.users.some(u => u.email === email && u.id !== userId);
-     if (emailExists) {
-       return res.status(409).json({ error: 'Email already registered' });
-     }
-     user.email = email;
-   }
-
-   user.updatedAt = new Date().toISOString();
-
-   res.status(200).json(user);
- };
-
- // DELETE a user
- const deleteUser = (req, res) => {
-   const userId = parseInt(req.params.id);
-   const userIndex = dataStore.users.findIndex(u => u.id === userId);
-
-   if (userIndex === -1) {
-     return res.status(404).json({ error: 'User not found' });
-   }
-
-   // Remove the user
-   dataStore.users.splice(userIndex, 1);
-
-   // Also remove user's videos and comments
-   dataStore.videos = dataStore.videos.filter(v => v.userId !== userId);
-   dataStore.comments = dataStore.comments.filter(c => c.userId !== userId);
-
-   // Remove user from followers/following lists
-dataStore.users.forEach(user => {
-    user.followers = user.followers.filter(id => id !== userId);
-    user.following = user.following.filter(id => id !== userId);
-});
-
-res.status(204).end();
+// Update user
+exports.updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, bio, avatar } = req.body;
+    
+    // Check if user exists
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(id) }
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Update user
+    const updatedUser = await prisma.user.update({
+      where: { id: parseInt(id) },
+      data: {
+        name,
+        bio,
+        avatar,
+        updatedAt: new Date()
+      }
+    });
+    
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = updatedUser;
+    
+    res.status(200).json(userWithoutPassword);
+  } catch (error) {
+    console.error(`Error updating user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to update user' });
+  }
 };
 
-// GET user videos
-const getUserVideos = (req, res) => {
-const userId = parseInt(req.params.id);
-const user = dataStore.users.find(u => u.id === userId);
-
-if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-}
-
-const videos = dataStore.videos.filter(v => v.userId === userId);
-res.status(200).json(videos);
+// Delete user
+exports.deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if user exists
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(id) }
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Delete user
+    await prisma.user.delete({
+      where: { id: parseInt(id) }
+    });
+    
+    res.status(200).json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error(`Error deleting user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to delete user' });
+  }
 };
 
-// GET user followers
-const getUserFollowers = (req, res) => {
-const userId = parseInt(req.params.id);
-const user = dataStore.users.find(u => u.id === userId);
-
-if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-}
-
-const followers = user.followers.map(followerId => {
-    return dataStore.users.find(u => u.id === followerId);
-}).filter(Boolean);
-
-res.status(200).json(followers);
+// Get user videos
+exports.getUserVideos = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const videos = await prisma.video.findMany({
+      where: { userId: parseInt(id) },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatar: true
+          }
+        },
+        _count: {
+          select: {
+            likes: true,
+            comments: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+    
+    res.status(200).json(videos);
+  } catch (error) {
+    console.error(`Error fetching videos for user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to fetch user videos' });
+  }
 };
 
-// POST follow user
-const followUser = (req, res) => {
-const userToFollowId = parseInt(req.params.id);
-const { followerId } = req.body;
-
-if (!followerId) {
-    return res.status(400).json({ error: 'followerId is required' });
-}
-
-const followerIdInt = parseInt(followerId);
-const userToFollow = dataStore.users.find(u => u.id === userToFollowId);
-const follower = dataStore.users.find(u => u.id === followerIdInt);
-
-if (!userToFollow) {
-  return res.status(404).json({ error: 'User to follow not found' });
-}
-
-if (!follower) {
-  return res.status(404).json({ error: 'Follower not found' });
-}
-
-// Can't follow yourself
-if (userToFollowId === followerIdInt) {
-  return res.status(400).json({ error: 'Users cannot follow themselves' });
-}
-
-// Check if already following
-if (userToFollow.followers.includes(followerIdInt)) {
-  return res.status(409).json({ error: 'Already following this user' });
-}
-
-// Add follower relationship
-userToFollow.followers.push(followerIdInt);
-follower.following.push(userToFollowId);
-
-res.status(201).json({ message: 'User followed successfully' });
+// Get user followers
+exports.getUserFollowers = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const followers = await prisma.follow.findMany({
+      where: { followingId: parseInt(id) },
+      include: {
+        follower: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatar: true
+          }
+        }
+      }
+    });
+    
+    const formattedFollowers = followers.map(follow => follow.follower);
+    
+    res.status(200).json(formattedFollowers);
+  } catch (error) {
+    console.error(`Error fetching followers for user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to fetch followers' });
+  }
 };
 
-// DELETE unfollow user
-const unfollowUser = (req, res) => {
-const userToUnfollowId = parseInt(req.params.id);
-const { followerId } = req.body;
-
-if (!followerId) {
-  return res.status(400).json({ error: 'followerId is required' });
-}
-
-const followerIdInt = parseInt(followerId);
-const userToUnfollow = dataStore.users.find(u => u.id === userToUnfollowId);
-const follower = dataStore.users.find(u => u.id === followerIdInt);
-
-if (!userToUnfollow || !follower) {
-  return res.status(404).json({ error: 'User not found' });
-}
-
-// Check if following relationship exists
-const followerIndex = userToUnfollow.followers.indexOf(followerIdInt);
-const followingIndex = follower.following.indexOf(userToUnfollowId);
-
-if (followerIndex === -1 || followingIndex === -1) {
-    return res.status(404).json({ error: 'Follow relationship not found' });
-}
-
-// Remove follower relationship
-userToUnfollow.followers.splice(followerIndex, 1);
-follower.following.splice(followingIndex, 1);
-
-res.status(204).end();
+// Get user following
+exports.getUserFollowing = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const following = await prisma.follow.findMany({
+      where: { followerId: parseInt(id) },
+      include: {
+        following: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatar: true
+          }
+        }
+      }
+    });
+    
+    const formattedFollowing = following.map(follow => follow.following);
+    
+    res.status(200).json(formattedFollowing);
+  } catch (error) {
+    console.error(`Error fetching following for user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to fetch following' });
+  }
 };
 
-module.exports = {
-getAllUsers,
-getUserById,
-createUser,
-updateUser,
-deleteUser,
-getUserVideos,
-getUserFollowers,
-followUser,
-unfollowUser
+// Follow user
+exports.followUser = async (req, res) => {
+  try {
+    const { id } = req.params; // User to follow
+    const followerId = req.user.id; // User making the request
+    
+    // Check if users exist
+    const userToFollow = await prisma.user.findUnique({
+      where: { id: parseInt(id) }
+    });
+    
+    if (!userToFollow) {
+      return res.status(404).json({ message: 'User to follow not found' });
+    }
+    
+    // Check if already following
+    const existingFollow = await prisma.follow.findUnique({
+      where: {
+        followerId_followingId: {
+          followerId: parseInt(followerId),
+          followingId: parseInt(id)
+        }
+      }
+    });
+    
+    if (existingFollow) {
+      return res.status(400).json({ message: 'Already following this user' });
+    }
+    
+    // Create follow relationship
+    await prisma.follow.create({
+      data: {
+        followerId: parseInt(followerId),
+        followingId: parseInt(id)
+      }
+    });
+    
+    res.status(200).json({ message: 'Successfully followed user' });
+  } catch (error) {
+    console.error(`Error following user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to follow user' });
+  }
+};
+
+// Unfollow user
+exports.unfollowUser = async (req, res) => {
+  try {
+    const { id } = req.params; // User to unfollow
+    const followerId = req.user.id; // User making the request
+    
+    // Check if follow relationship exists
+    const follow = await prisma.follow.findUnique({
+      where: {
+        followerId_followingId: {
+          followerId: parseInt(followerId),
+          followingId: parseInt(id)
+        }
+      }
+    });
+    
+    if (!follow) {
+      return res.status(400).json({ message: 'Not following this user' });
+    }
+    
+    // Delete follow relationship
+    await prisma.follow.delete({
+      where: {
+        followerId_followingId: {
+          followerId: parseInt(followerId),
+          followingId: parseInt(id)
+        }
+      }
+    });
+    
+    res.status(200).json({ message: 'Successfully unfollowed user' });
+  } catch (error) {
+    console.error(`Error unfollowing user ${req.params.id}:`, error);
+    res.status(500).json({ message: 'Failed to unfollow user' });
+  }
 };
